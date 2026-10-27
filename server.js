@@ -631,6 +631,14 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
+  const publicUrl = process.env.RENDER_EXTERNAL_URL;
+  if (publicUrl) {
+    console.log('\n  Vampir Köylü hazır.\n');
+    console.log(`  Oyuncular : ${publicUrl}`);
+    console.log(`  Yönetici  : ${publicUrl}/yonetici`);
+    console.log(`  PIN       : ${process.env.ADMIN_PIN ? 'ADMIN_PIN ortam değişkeninde' : ADMIN_PIN}\n`);
+    return;
+  }
   const urls = lanUrls();
   console.log('\n  Vampir Köylü hazır.\n');
   console.log(`  Yönetici ekranı : http://localhost:${PORT}/yonetici`);
