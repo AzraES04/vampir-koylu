@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0e1117">
+<title>Vampir Köylü Yönetici</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+SC:wght@600;700&family=Manrope:wght@400;600;700;800&display=swap">
+<link rel="stylesheet" href="/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+<div class="wrap wide">
+  <header class="topbar">
+    <div class="brandwrap">
+      <span class="org" data-brand="org">İEE</span>
+      <div class="brand">Vampir <b>Köylü</b><small><span data-brand="event">Savunma Sanayi Günleri</span> · Yönetici</small></div>
+    </div>
+    <div class="row" id="topActions"></div>
+  </header>
+  <main id="app" style="display:flex;flex-direction:column;gap:18px"></main>
+  <footer class="credit"><span data-brand="orgname">İEE</span><span class="sep"></span><span data-brand="event">Savunma Sanayi Günleri</span><span class="sep"></span><span data-brand="tagline">Toplantı sonrası oyun gecesi</span></footer>
+</div>
+
+<script src="/shared.js"></script>
+<script>
+const app = document.getElementById('app');
+const topActions = document.getElementById('topActions');
+let pin = store.get('vk-pin');
+let view = null;
+let es = null;
+let online = false;
+let hideRoles = store.get('vk-hide') === '1';
+let lanUrls = [];
+let shareUrl = store.get('vk-share') || '';
+let gateMsg = '';
+let lastQr = '';
+
+function joinUrl() {
+  if (shareUrl) return shareUrl;
+  const local = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+  return local && lanUrls.length ? lanUrls[0] : location.origin;
+}
+
+async function admin(type, extra = {}) {
+  try {
+    await postJson('/api/admin', { pin, type, ...extra });
+  } catch (err) {
+    if (err.status === 401) { gateMsg = err.message; signOut(); }
+    else toast(err.message);
+  }
+}
+
+function signOut() {
+  if (es) es.close();
+  es = null;
+  pin = null;
+  view = null;
+  store.del('vk-pin');
+  render();
+}
+
+async function signIn(p) {
+  try {
+    const info = await postJson('/api/admin', { pin: p, type: 'info' });
+    pin = p;
+    lanUrls = info.urls || [];
+    gateMsg = '';
+    store.set('vk-pin', p);
+    es = connect(`pin=${encodeURIComponent(p)}`, (data) => {
+      if (data.kind !== 'admin') return;
+      view = data;
+      render();
+    }, (ok) => { online = ok; renderTop(); });
+  } catch (err) {
+    gateMsg = err.status === 401 ? 'PIN hatalı. Sunucunun açıldığı pencerede yazıyor.' : err.message;
+    store.del('vk-pin');
+    pin = null;
+    render();
+  }
+}
+
+// ---------- Parçalar ----------
+
+const byId = (id) => view.players.find((p) => p.id === id);
+const nm = (id) => esc(byId(id)?.name || '?');
+
+function roleTag(role) {
+  if (!role) return '<span class="muted">—</span>';
+  if (hideRoles) return '<span class="rtag hidden">•••</span>';
+  const cls = role === 'vampir' ? 'vampir' : role === 'deli' ? 'deli' : role === 'koylu' ? '' : 'special';
+  return `<span class="rtag ${cls}">${esc(ROLE_INFO[role].name)}</span>`;
+}
+
+function renderTop() {
+  if (!pin) { topActions.innerHTML = ''; return; }
+  topActions.innerHTML = `
+    <span class="pill ${online ? '' : 'off'}"><span class="dot"></span>${view ? esc(phaseLabel(view.phase, view.round)) : 'Bağlanıyor'}</span>
+    <button class="btn small" data-act="toggle-hide">${hideRoles ? 'Rolleri göster' : 'Rolleri gizle'}</button>
+    <button class="btn small ghost" data-act="signout">Çıkış</button>`;
+}
+
+function script() {
+  const v = view;
+  if (v.phase === 'lobby') return 'Herkes QR kodu okutup adını yazsın. Katılım tamamlanınca rol dağılımını kontrol edip rolleri dağıtın.';
+  if (v.phase === 'reveal') return 'Herkes rolüne gizlice baksın, kimse ekranını göstermesin. Hazır olunca geceyi başlatın.';
+  if (v.phase === 'night') return '“Köy uyuyor, herkes gözlerini kapatsın. Vampirler, doktor, gözcü ve cadı seçimlerini telefondan yapsın.” Herkes seçince sabahı getirin.';
+  if (v.phase === 'day' && v.hunterQueue.length) return 'Avcı öldü. Son atışını telefonundan yapmasını bekleyin ya da onun yerine buradan seçin.';
+  if (v.phase === 'day' && v.voting.open) return 'Herkes telefonundan oy versin, oylar canlı görünüyor. Hazır olunca oylamayı kapatın.';
+  if (v.phase === 'day') return 'Gecenin haberini yüksek sesle okuyun. Köy tartışsın; hazır olunca oylamayı açın ya da doğrudan geceye geçin.';
+  return 'Oyun bitti. Sonucu açıklayın; yeni el için lobiye dönün, oyuncular yeniden katılmak zorunda kalmaz.';
+}
+
+function primaryActions() {
+  const v = view;
+  const n = v.players.length;
+  if (v.phase === 'lobby') return `<button class="btn primary" data-act="deal" ${n < 3 ? 'disabled' : ''}>Rolleri dağıt (${n} kişi)</button>`;
+  if (v.phase === 'reveal') return `<button class="btn primary" data-act="start_night">Geceyi başlat</button>`;
+  if (v.phase === 'night') return `<button class="btn light" data-act="end_night">Sabahı getir</button>`;
+  if (v.phase === 'day') {
+    const blocked = v.hunterQueue.length ? 'disabled' : '';
+    return v.voting.open
+      ? `<button class="btn primary" data-act="close_vote">Oylamayı kapat ve sonucu açıkla</button>`
+      : `<button class="btn primary" data-act="open_vote" ${blocked}>Oylamayı aç</button>
+         <button class="btn" data-act="start_night" ${blocked}>Geceye geç</button>`;
+  }
+  return `<button class="btn primary" data-act="to_lobby">Yeni el (lobiye dön)</button>`;
+}
+
+function stagePanel() {
+  const v = view;
+  const latest = v.log[v.log.length - 1];
+  const url = joinUrl();
+  return `<section class="panel">
+    <div class="stage">
+      <div style="display:flex;flex-direction:column;gap:12px;min-width:0">
+        <div class="eyebrow">${esc(phaseLabel(v.phase, v.round))}</div>
+        ${v.phase === 'ended' ? `<h1>${esc(WINNER_TEXT[v.winner] || 'Oyun bitti')}</h1>` : ''}
+        <p class="script">${script()}</p>
+        ${latest && v.phase !== 'lobby' ? `<p class="notice"><b>Son haber:</b> ${esc(latest.text)}</p>` : ''}
+        <div class="row">${primaryActions()}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;align-items:center">
+        <button class="qr" id="qr" data-act="big-qr" aria-label="QR kodu büyüt"></button>
+        <span class="small muted" style="text-align:center;max-width:190px;overflow-wrap:anywhere">${esc(url.replace(/^https?:\/\//, ''))}</span>
+      </div>
+    </div>
+    ${v.phase === 'lobby' ? sharePanel(url) : ''}
+  </section>`;
+}
+
+function shareText(url) {
+  return `${BRAND.event} oyun gecesi! Vampir Köylü'ye katılmak için telefondan aç ve adını yaz: ${url}`;
+}
+
+function sharePanel(url) {
+  return `<div style="display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--line);padding-top:14px">
+    <div class="eyebrow">Oyuncuları davet et</div>
+    <div class="row">
+      <a class="btn" style="text-decoration:none;display:inline-flex;align-items:center" href="https://wa.me/?text=${encodeURIComponent(shareText(url))}" target="_blank" rel="noopener">WhatsApp'ta paylaş</a>
+      <button class="btn" data-act="copy-link">Linki kopyala</button>
+      <button class="btn ghost" data-act="big-qr">QR'ı tam ekran göster</button>
+    </div>
+    <p class="small muted">Linki ekip grubuna atın ya da QR'ı tam ekran açıp telefonunuzu ortada dolaştırın. Bu ekranı açan kişi herkesin rolünü görür; o yüzden yönetici oyuna oyuncu olarak katılmaz.</p>
+  </div>`;
+}
+
+function lobbyPanel() {
+  const v = view;
+  const c = v.counts;
+  const special = ['vampir', 'doktor', 'gozcu', 'avci', 'cadi', 'deli'];
+  const total = special.reduce((s, r) => s + (c[r] || 0), 0);
+  const koylu = v.players.length - total;
+  return `<section class="panel">
+    <div class="row between">
+      <h2>Rol dağılımı</h2>
+      <span class="small muted">${v.autoCounts ? 'Oyuncu sayısına göre otomatik' : '<button class="btn small ghost" data-act="auto_counts">Otomatiğe dön</button>'}</span>
+    </div>
+    <div class="counts">
+      ${special.map((r) => `<div class="count">
+        <span class="lbl">${ROLE_INFO[r].name}</span>
+        <span class="row" style="gap:6px;flex-wrap:nowrap">
+          <button class="step" data-act="count" data-role="${r}" data-v="${(c[r] || 0) - 1}" aria-label="${ROLE_INFO[r].name} azalt">−</button>
+          <span class="n">${c[r] || 0}</span>
+          <button class="step" data-act="count" data-role="${r}" data-v="${(c[r] || 0) + 1}" aria-label="${ROLE_INFO[r].name} artır">+</button>
+        </span>
+      </div>`).join('')}
+      <div class="count"><span class="lbl">Köylü</span><span class="n" style="${koylu < 0 && v.players.length ? 'color:var(--blood)' : ''}">${Math.max(0, koylu)}</span></div>
+    </div>
+    ${koylu < 0 && v.players.length ? '<p class="notice">Özel rol sayısı oyuncu sayısından fazla. Birkaç rolü azaltın.</p>' : ''}
+    <label class="switch"><input type="checkbox" id="reveal" data-act="toggle_reveal" ${v.revealOnDeath ? 'checked' : ''}> Ölenlerin rolü herkese açıklansın</label>
+    <details>
+      <summary class="small muted" style="cursor:pointer">Oyuncular farklı bir adresten mi giriyor?</summary>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
+        <p class="small muted">Tünel (ör. cloudflared) kullanıyorsanız oradaki adresi yazın; QR kod onu göstersin.</p>
+        <input type="url" id="shareUrl" placeholder="${esc(lanUrls[0] || 'https://…')}" value="${esc(shareUrl)}">
+        <div class="row"><button class="btn small" data-act="save-share">Kaydet</button>${lanUrls.length > 1 ? `<span class="small muted">Diğer yerel adresler: ${lanUrls.slice(1).map(esc).join(', ')}</span>` : ''}</div>
+      </div>
+    </details>
+  </section>`;
+}
+
+function nightPanel() {
+  const v = view;
+  const n = v.night;
+  const alive = v.players.filter((p) => p.alive);
+  const has = (r) => alive.some((p) => p.role === r);
+  const vamps = alive.filter((p) => p.role === 'vampir');
+  const voted = vamps.filter((p) => n.vampireVotes[p.id]).length;
+  const wait = '<span class="wait">bekleniyor…</span>';
+
+  const vampText = Object.keys(n.tally).length
+    ? Object.entries(n.tally).sort((a, b) => b[1] - a[1]).map(([id, c]) => `${nm(id)} <b>(${c})</b>`).join(', ')
+    : wait;
+  const rows = [
+    ['Vampirler', `${vampText}<br><span class="small muted">${voted}/${vamps.length} vampir oy verdi${n.leaders.length > 1 ? ' · eşitlikte rastgele seçilir' : ''}</span>`],
+  ];
+  if (has('doktor')) rows.push(['Doktor', n.doctor ? `${nm(n.doctor)} korunuyor` : wait]);
+  if (has('gozcu')) rows.push(['Gözcü', n.seer ? `${nm(n.seer.targetId)} → <b>${n.seer.isVampire ? 'Vampir' : 'Vampir değil'}</b>` : wait]);
+  if (has('cadi')) {
+    const parts = [];
+    if (n.witchSave) parts.push('hayat iksirini kullanıyor');
+    if (n.witchKill) parts.push(`zehirlemek için seçti: ${nm(n.witchKill)}`);
+    if (!parts.length) parts.push(`<span class="wait">şimdilik iksir yok</span> <span class="small muted">(hayat: ${v.witch.saveUsed ? 'kullanıldı' : 'var'} · ölüm: ${v.witch.killUsed ? 'kullanıldı' : 'var'})</span>`);
+    rows.push(['Cadı', parts.join(', ')]);
+  }
+
+  return `<section class="panel">
+    <h2>Bu gece</h2>
+    <div class="acts-list">${rows.map(([k, val]) => `<div class="act"><span class="k">${k}</span><span class="v">${val}</span></div>`).join('')}</div>
+    <p class="small muted">Sabahı getirdiğinizde sonuç otomatik hesaplanır: doktor ve cadının hayat iksiri vampir kurbanını kurtarır.</p>
+  </section>`;
+}
+
+function hunterPanel() {
+  const v = view;
+  const id = v.hunterQueue[0];
+  if (!id) return '';
+  const targets = v.players.filter((p) => p.alive && p.id !== id);
+  return `<section class="panel alert">
+    <div class="eyebrow">Avcı · son atış</div>
+    <h2>${nm(id)} son atışını yapıyor</h2>
+    <p class="small muted">Avcı telefonundan seçebilir. Telefonu yoksa ya da söylüyorsa onun yerine buradan seçin.</p>
+    <div class="targets">${targets.map((p) => `<button class="target danger" data-act="hunter" data-id="${p.id}"><span class="nm">${esc(p.name)}</span><span class="meta">${hideRoles ? '' : esc(ROLE_INFO[p.role]?.name || '')}</span></button>`).join('')}</div>
+    <button class="btn ghost" data-act="hunter" data-id="">Kimseyi vurmadı</button>
+  </section>`;
+}
+
+function votePanel() {
+  const v = view;
+  if (v.phase !== 'day' || !v.voting.open) return '';
+  const tally = v.voting.tally;
+  const entries = Object.entries(tally).sort((a, b) => b[1].length - a[1].length);
+  const voters = new Set(entries.flatMap(([, l]) => l));
+  const missing = v.players.filter((p) => p.alive && !voters.has(p.id));
+  const max = Math.max(1, ...entries.map(([, l]) => l.length));
+  return `<section class="panel gold">
+    <div class="row between"><h2>Oylama</h2><span class="small muted">${voters.size}/${voters.size + missing.length} oy</span></div>
+    <div class="bars">${entries.length ? entries.map(([id, l]) => `
+      <div class="bar">
+        <span class="lbl">${id === 'pas' ? 'Pas' : nm(id)}</span><span class="cnt">${l.length}</span>
+        <span class="track"><span class="fill" style="width:${(l.length / max) * 100}%"></span></span>
+        <span class="who">${l.map(nm).join(', ')}</span>
+      </div>`).join('') : '<p class="muted small">Henüz oy yok.</p>'}</div>
+    ${missing.length ? `<p class="small muted">Oy vermeyenler: ${missing.map((p) => esc(p.name)).join(', ')}</p>` : ''}
+    <p class="small muted">Eşitlik olursa kimse asılmaz; isterseniz oyuncu listesinden elle çıkarabilirsiniz.</p>
+  </section>`;
+}
+
+function playersPanel() {
+  const v = view;
+  const list = [...v.players].sort((a, b) => (v.phase === 'lobby' ? a.joinedAt - b.joinedAt : (b.alive - a.alive) || a.name.localeCompare(b.name, 'tr')));
+  const alive = v.players.filter((p) => p.alive).length;
+  return `<section class="panel">
+    <div class="row between"><h2>Oyuncular</h2><span class="small muted">${v.phase === 'lobby' ? `${v.players.length} kişi katıldı` : `${alive} hayatta · ${v.players.length} kişi`}</span></div>
+    ${list.length ? `<div class="tablewrap"><table>
+      <thead><tr><th>İsim</th>${v.phase === 'lobby' ? '' : '<th>Rol</th><th>Durum</th>'}<th></th></tr></thead>
+      <tbody>${list.map((p) => `<tr class="${p.alive ? '' : 'dead'}">
+        <td class="pname">${esc(p.name)}</td>
+        ${v.phase === 'lobby' ? '' : `<td>${roleTag(p.role)}</td><td><span class="status ${p.alive ? 'ok' : 'dead'}">${p.alive ? 'Hayatta' : 'Öldü'}</span></td>`}
+        <td class="acts">
+          ${v.phase === 'lobby' || v.phase === 'ended' ? '' : p.alive
+            ? `<button class="btn small" data-act="kill" data-id="${p.id}">Öldür</button>`
+            : `<button class="btn small" data-act="revive" data-id="${p.id}">Dirilt</button>`}
+          <button class="btn small ghost" data-act="kick" data-id="${p.id}">Çıkar</button>
+        </td>
+      </tr>`).join('')}</tbody>
+    </table></div>` : '<p class="muted">Henüz kimse katılmadı. Oyunculara QR kodu gösterin.</p>'}
+  </section>`;
+}
+
+function summaryPanel() {
+  const v = view;
+  if (v.phase === 'lobby' || hideRoles) return '';
+  const rows = ROLE_ORDER.map((r) => {
+    const all = v.players.filter((p) => p.role === r);
+    return [r, all.filter((p) => p.alive).length, all.length, all];
+  }).filter(([, , total]) => total);
+  return `<section class="panel">
+    <h2>Roller</h2>
+    <div class="acts-list">${rows.map(([r, a, t, all]) => `<div class="act">
+      <span class="k">${ROLE_INFO[r].name} <span class="muted">${a}/${t}</span></span>
+      <span class="v small">${all.map((p) => `<span style="${p.alive ? '' : 'text-decoration:line-through;color:var(--muted)'}">${esc(p.name)}</span>`).join(', ')}</span>
+    </div>`).join('')}</div>
+    ${v.seerHistory.length ? `<p class="small muted">Gözcünün baktıkları: ${v.seerHistory.map((h) => `${nm(h.targetId)} (${h.isVampire ? 'V' : '–'})`).join(', ')}</p>` : ''}
+  </section>`;
+}
+
+function logPanel() {
+  const v = view;
+  if (!v.log.length) return '';
+  return `<section class="panel">
+    <h2>Köy defteri</h2>
+    <ul class="log">${[...v.log].reverse().slice(0, 30).map((l) => `<li><span class="when">${l.round ? `${l.round}. ${l.phase === 'night' ? 'gece' : 'gün'}` : ''}</span>${esc(l.text)}</li>`).join('')}</ul>
+  </section>`;
+}
+
+function dangerPanel() {
+  const v = view;
+  return `<section class="panel">
+    <h3>Oyun kontrolü</h3>
+    <div class="row">
+      ${!['lobby', 'ended'].includes(v.phase) ? '<button class="btn small" data-act="end_game">Oyunu bitir, rolleri göster</button>' : ''}
+      ${v.phase !== 'lobby' ? '<button class="btn small ghost" data-act="to_lobby">Lobiye dön</button>' : ''}
+      ${v.phase === 'lobby' && v.players.length ? '<button class="btn small ghost" data-act="clear_players">Tüm oyuncuları sil</button>' : ''}
+    </div>
+  </section>`;
+}
+
+// ---------- Ekran ----------
+
+function renderGate() {
+  app.innerHTML = `
+    <section style="padding-block:28px 6px;display:flex;flex-direction:column;gap:10px;max-width:520px">
+      <div class="eyebrow">Yönetici girişi</div>
+      <h1>Oyunu sen yönetiyorsun</h1>
+      <p class="muted">Sunucuyu başlattığın pencerede yazan 4 haneli PIN'i gir. Bu ekranda herkesin rolünü göreceksin, oyunculara gösterme.</p>
+    </section>
+    <form class="panel" id="gate" style="max-width:520px" novalidate>
+      <label for="pin" class="eyebrow">PIN</label>
+      <input type="password" id="pin" inputmode="numeric" autocomplete="off" maxlength="12" required>
+      ${gateMsg ? `<p class="notice">${esc(gateMsg)}</p>` : ''}
+      <button class="btn primary block" type="submit">Giriş yap</button>
+    </form>`;
+  document.getElementById('gate').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const p = document.getElementById('pin').value.trim();
+    if (p) signIn(p);
+  });
+}
+
+function drawQr() {
+  const el = document.getElementById('qr');
+  if (!el) return;
+  const url = joinUrl();
+  if (typeof QRCode === 'undefined') {
+    el.innerHTML = `<span style="color:#111;font-size:12px;text-align:center">QR yüklenemedi.<br>Adresi yazdırın.</span>`;
+    return;
+  }
+  el.innerHTML = '';
+  new QRCode(el, { text: url, width: 264, height: 264, correctLevel: QRCode.CorrectLevel.M });
+  lastQr = url;
+}
+
+function render() {
+  renderTop();
+  if (!pin) return renderGate();
+  if (!view) {
+    app.innerHTML = '<p class="muted" style="padding-block:40px">Bağlanılıyor…</p>';
+    return;
+  }
+  document.body.classList.toggle('phase-day', view.phase === 'day');
+  const active = document.activeElement?.id;
+  const draft = document.getElementById('shareUrl')?.value;
+  const detailsOpen = app.querySelector('details')?.open;
+  const left = [stagePanel(), hunterPanel(), view.phase === 'lobby' ? lobbyPanel() : '', view.phase === 'night' ? nightPanel() : '', votePanel(), playersPanel()];
+  const right = [summaryPanel(), logPanel(), dangerPanel()];
+  app.innerHTML = `<div class="admin-grid"><div class="col">${left.join('')}</div><div class="col">${right.join('')}</div></div>`;
+  drawQr();
+  const det = app.querySelector('details');
+  if (det && detailsOpen) det.open = true;
+  const input = document.getElementById('shareUrl');
+  if (input && draft !== undefined) input.value = draft;
+  if (active === 'shareUrl') input?.focus();
+}
+
+function bigQr() {
+  const url = joinUrl();
+  const ov = document.createElement('div');
+  ov.className = 'overlay';
+  ov.innerHTML = `<div class="big"><span style="font-size:0.8rem;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:#555">${esc(BRAND.org)} · ${esc(BRAND.event)}</span><strong style="font-size:1.3rem;text-align:center">Vampir Köylü: telefonla okut, adını yaz, katıl</strong><div id="bigqr"></div><div class="joinurl">${esc(url)}</div></div>`;
+  ov.addEventListener('click', () => ov.remove());
+  document.body.appendChild(ov);
+  if (typeof QRCode !== 'undefined') new QRCode(document.getElementById('bigqr'), { text: url, width: 560, height: 560, correctLevel: QRCode.CorrectLevel.M });
+}
+
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-act]');
+  if (!el) return;
+  const a = el.dataset.act;
+  const id = el.dataset.id;
+  const name = id ? byId(id)?.name : '';
+  switch (a) {
+    case 'toggle-hide':
+      hideRoles = !hideRoles;
+      store.set('vk-hide', hideRoles ? '1' : '0');
+      return render();
+    case 'signout': return signOut();
+    case 'big-qr': return bigQr();
+    case 'copy-link': {
+      const text = shareText(joinUrl());
+      navigator.clipboard?.writeText(text)
+        .then(() => toast('Davet mesajı kopyalandı.'))
+        .catch(() => toast(joinUrl()));
+      return;
+    }
+    case 'save-share':
+      shareUrl = document.getElementById('shareUrl').value.trim().replace(/\/+$/, '');
+      store.set('vk-share', shareUrl);
+      toast(shareUrl ? 'Adres kaydedildi, QR güncellendi.' : 'Yerel ağ adresine dönüldü.');
+      return render();
+    case 'count': return admin('set_count', { role: el.dataset.role, value: Number(el.dataset.v) });
+    case 'toggle_reveal': return admin('toggle_reveal');
+    case 'hunter': return admin('hunter_shoot', { target: id || null });
+    case 'kill':
+      if (confirm(`${name} oyundan çıkarılıp ölü sayılsın mı?`)) admin('kill', { id });
+      return;
+    case 'revive': return admin('revive', { id });
+    case 'kick':
+      if (confirm(`${name} oyundan tamamen silinsin mi?`)) admin('kick', { id });
+      return;
+    case 'end_game':
+      if (confirm('Oyun bitirilsin ve herkesin rolü açıklansın mı?')) admin('end_game');
+      return;
+    case 'clear_players':
+      if (confirm('Tüm oyuncular silinsin mi? Herkes yeniden katılmak zorunda kalır.')) admin('clear_players');
+      return;
+    case 'to_lobby':
+      if (view.phase === 'ended' || confirm('Oyun sıfırlanıp lobiye dönülsün mü? Oyuncular kalır, roller silinir.')) admin('to_lobby');
+      return;
+    default:
+      return admin(a);
+  }
+});
+
+mountBrand();
+keepScreenOn();
+if (pin) signIn(pin);
+else render();
+</script>
+</body>
+</html>

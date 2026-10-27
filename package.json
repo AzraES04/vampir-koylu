@@ -1,0 +1,13 @@
+{
+  "name": "vampir-koylu",
+  "version": "1.0.0",
+  "private": true,
+  "description": "İEE Savunma Sanayi Günleri için telefondan oynanan Vampir Köylü",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

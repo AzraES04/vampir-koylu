@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0e1117">
+<title>Vampir Köylü</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+SC:wght@600;700&family=Manrope:wght@400;600;700;800&display=swap">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="topbar">
+    <div class="brandwrap">
+      <span class="org" data-brand="org">İEE</span>
+      <div class="brand">Vampir <b>Köylü</b><small data-brand="event">Savunma Sanayi Günleri</small></div>
+    </div>
+    <span class="pill" id="phase"><span class="dot"></span><span id="phaseText">Bağlanıyor</span></span>
+  </header>
+  <main id="app" style="display:flex;flex-direction:column;gap:18px"></main>
+  <footer class="credit"><span data-brand="orgname">İEE</span><span class="sep"></span><span data-brand="event">Savunma Sanayi Günleri</span><span class="sep"></span><span data-brand="tagline">Toplantı sonrası oyun gecesi</span></footer>
+</div>
+
+<script src="/shared.js"></script>
+<script>
+const app = document.getElementById('app');
+let token = store.get('vk-token');
+let view = null;
+let es = null;
+let joinMsg = '';
+let roleShown = false;
+let roleTimer;
+let busy = false;
+
+function setPhasePill(text, online) {
+  document.getElementById('phaseText').textContent = text;
+  document.getElementById('phase').classList.toggle('off', !online);
+}
+
+function start() {
+  if (es) es.close();
+  if (!token) return render();
+  es = connect(`token=${encodeURIComponent(token)}`, (data) => {
+    if (data.kind === 'unknown' || data.kind === 'kicked') {
+      joinMsg = data.kind === 'kicked'
+        ? 'Yönetici seni oyundan çıkardı. İstersen yeniden katılabilirsin.'
+        : 'Oturumun bulunamadı (sunucu yeniden başlamış olabilir). Lütfen yeniden katıl.';
+      logout();
+      return;
+    }
+    const prevPhase = view?.phase;
+    view = data;
+    if (prevPhase && prevPhase !== data.phase && data.phase !== 'night') roleShown = false;
+    if ('vibrate' in navigator && prevPhase && prevPhase !== data.phase) { try { navigator.vibrate(120); } catch {} }
+    render();
+  }, (online) => {
+    setPhasePill(view ? phaseLabel(view.phase, view.round) : 'Bağlanıyor', online);
+  });
+}
+
+function logout() {
+  if (es) es.close();
+  es = null;
+  token = null;
+  view = null;
+  store.del('vk-token');
+  render();
+}
+
+async function act(type, target) {
+  if (busy) return;
+  busy = true;
+  try {
+    await postJson('/api/action', { token, type, target });
+  } catch (err) {
+    if (err.status === 401) { joinMsg = err.message; logout(); }
+    else toast(err.message);
+  } finally {
+    busy = false;
+  }
+}
+
+// ---------- Parçalar ----------
+
+const byId = (id) => view.players.find((p) => p.id === id);
+const nm = (id) => esc(byId(id)?.name || '?');
+
+function roleCard(compact) {
+  const r = ROLE_INFO[view.me.role];
+  if (!r) return '';
+  const cls = roleShown ? `shown ${view.me.role}` : '';
+  const inner = roleShown
+    ? `<div class="sigil">${esc(r.sigil)}</div>
+       <div class="eyebrow">Senin rolün · ${esc(r.team)}</div>
+       <div class="rname">${esc(r.name)}</div>
+       <p class="rdesc">${esc(r.desc)}</p>
+       <p class="small muted">Gizlemek için dokun</p>`
+    : `<div class="sigil">?</div>
+       <div class="rname" style="font-size:1.6rem">Rolün gizli</div>
+       <p class="rdesc">Etrafında kimse ekrana bakmıyorken görmek için dokun.</p>`;
+  return `<button class="rolecard ${cls}" data-act="toggle-role" ${compact ? 'style="min-height:0;padding:18px"' : ''} aria-pressed="${roleShown}">${inner}</button>`;
+}
+
+function teammates() {
+  if (view.me.role !== 'vampir') return '';
+  const mates = view.players.filter((p) => p.role === 'vampir' && p.id !== view.me.id);
+  if (!mates.length) return `<div class="notice">Köydeki tek vampir sensin.</div>`;
+  return `<div class="panel">
+    <div class="eyebrow">Diğer vampirler</div>
+    <div class="chips">${mates.map((p) => `<span class="chip vamp ${p.alive ? '' : 'dead'}">${esc(p.name)}</span>`).join('')}</div>
+  </div>`;
+}
+
+function targetGrid(list, { selected, act, danger, meta, disabled } = {}) {
+  if (!list.length) return `<p class="muted">Seçilebilecek kimse yok.</p>`;
+  return `<div class="targets">${list.map((p) => {
+    const dis = disabled?.(p);
+    return `<button class="target ${danger ? 'danger' : ''} ${selected === p.id ? 'sel' : ''}" data-act="${act}" data-id="${p.id}" ${dis ? 'disabled' : ''}>
+      <span class="nm">${esc(p.name)}${p.id === view.me.id ? ' (sen)' : ''}</span>
+      ${meta?.(p) ? `<span class="meta">${meta(p)}</span>` : ''}
+    </button>`;
+  }).join('')}</div>`;
+}
+
+function aliveOthers({ includeMe } = {}) {
+  return view.players.filter((p) => p.alive && (includeMe || p.id !== view.me.id));
+}
+
+function sleepHero(text) {
+  return `<section class="night-hero">
+    <div class="moon" aria-hidden="true"></div>
+    <h2>Köy uyuyor</h2>
+    <p class="muted">${text}</p>
+  </section>`;
+}
+
+function nightPanel() {
+  const role = view.me.role;
+  const n = view.night || {};
+
+  if (role === 'vampir') {
+    const myVote = n.votes?.[view.me.id] || null;
+    const votersFor = (id) => Object.entries(n.votes || {}).filter(([, t]) => t === id).map(([v]) => nm(v));
+    const list = view.players.filter((p) => p.alive && p.role !== 'vampir');
+    return `<section class="panel alert">
+      <div class="eyebrow">${view.round}. gece · Vampirler</div>
+      <h2>Bu gece kimi ısırıyorsunuz?</h2>
+      <p class="muted small">Diğer vampirlerin seçimini canlı görürsün. En çok oyu alan kurban olur; eşitlikte rastgele biri seçilir.</p>
+      ${targetGrid(list, {
+        selected: myVote,
+        act: 'vampire_vote',
+        danger: true,
+        meta: (p) => { const v = votersFor(p.id); return v.length ? `Oy: ${v.join(', ')}` : ''; },
+      })}
+      ${myVote ? `<button class="btn ghost small" data-act="vampire_vote" data-id="">Oyumu geri al</button>` : ''}
+    </section>`;
+  }
+
+  if (role === 'doktor') {
+    return `<section class="panel">
+      <div class="eyebrow">${view.round}. gece · Doktor</div>
+      <h2>Bu gece kimi koruyorsun?</h2>
+      <p class="muted small">Seçimini sabaha kadar değiştirebilirsin.</p>
+      ${targetGrid(aliveOthers({ includeMe: true }), {
+        selected: n.choice,
+        act: 'protect',
+        disabled: (p) => p.id === n.lastProtected,
+        meta: (p) => (p.id === n.lastProtected ? 'Dün gece korudun' : ''),
+      })}
+    </section>`;
+  }
+
+  if (role === 'gozcu') {
+    if (n.seer) {
+      return `<section class="panel">
+        <div class="eyebrow">${view.round}. gece · Gözcü</div>
+        <h2>${nm(n.seer.targetId)}</h2>
+        <p class="result ${n.seer.isVampire ? 'bad' : 'good'}">${n.seer.isVampire ? 'Vampir' : 'Vampir değil'}</p>
+        <p class="muted small" style="text-align:center">Bu geceki bakışını kullandın. Gözlerini kapat.</p>
+      </section>`;
+    }
+    return `<section class="panel">
+      <div class="eyebrow">${view.round}. gece · Gözcü</div>
+      <h2>Kimin içini görmek istiyorsun?</h2>
+      <p class="muted small">Seçtiğin anda sonucu görürsün; gecede tek bakış hakkın var.</p>
+      ${targetGrid(aliveOthers(), { act: 'inspect' })}
+    </section>`;
+  }
+
+  if (role === 'cadi') {
+    const victims = n.victims || [];
+    let save;
+    if (n.saveUsed) save = `<p class="muted">Hayat iksirini kullandın.</p>`;
+    else if (!victims.length) save = `<p class="muted">Vampirler henüz kurban seçmedi. Seçtiklerinde burada görünecek.</p>`;
+    else save = `<p>Vampirlerin hedefi şu an: <b>${victims.map(nm).join(' / ')}</b>${victims.length > 1 ? ' (henüz berabere)' : ''}</p>
+      <button class="btn ${n.save ? 'light' : ''}" data-act="witch_save" data-id="${n.save ? '' : 'on'}">${n.save ? 'Hayat iksiri hazır · vazgeç' : 'Hayat iksirini kullan'}</button>`;
+
+    let kill;
+    if (n.killUsed) kill = `<p class="muted">Ölüm iksirini kullandın.</p>`;
+    else kill = `${targetGrid(aliveOthers(), { act: 'witch_kill', danger: true, selected: n.kill })}
+      ${n.kill ? `<button class="btn ghost small" data-act="witch_kill" data-id="">Ölüm iksirinden vazgeç</button>` : ''}`;
+
+    return `<section class="panel">
+      <div class="eyebrow">${view.round}. gece · Cadı</div>
+      <h2>İksirlerin</h2>
+      <h3>Hayat iksiri</h3>
+      ${save}
+      <h3>Ölüm iksiri</h3>
+      <p class="muted small">İstersen birini zehirle. Seçim sabaha kadar değişebilir.</p>
+      ${kill}
+    </section>`;
+  }
+
+  return sleepHero('Gözlerini kapat. Sabah olunca telefonun titreyecek ve haberler burada görünecek.');
+}
+
+function seerHistory() {
+  if (view.me.role !== 'gozcu' || !view.seerHistory?.length) return '';
+  return `<section class="panel">
+    <div class="eyebrow">Gördüklerin</div>
+    <ul class="log">${view.seerHistory.map((h) => `<li><span class="when">${h.round}. gece</span>${nm(h.targetId)}: <b style="color:var(${h.isVampire ? '--blood' : '--ok'})">${h.isVampire ? 'Vampir' : 'Vampir değil'}</b></li>`).join('')}</ul>
+  </section>`;
+}
+
+function hunterPanel() {
+  if (view.hunterTurn) {
+    return `<section class="panel alert">
+      <div class="eyebrow">Avcı · son atış</div>
+      <h2>Öldün ama son kurşunun var</h2>
+      <p class="muted small">Yanında götürmek istediğin kişiyi seç.</p>
+      ${targetGrid(aliveOthers(), { act: 'hunter_shoot', danger: true })}
+      <button class="btn ghost" data-act="hunter_shoot" data-id="">Kimseyi vurma</button>
+    </section>`;
+  }
+  if (view.hunterPending) return `<div class="notice">Avcı son atışını yapıyor…</div>`;
+  return '';
+}
+
+function voteBars() {
+  const tally = view.voting?.tally || {};
+  const entries = Object.entries(tally).sort((a, b) => b[1].length - a[1].length);
+  if (!entries.length) return `<p class="muted small">Henüz oy yok.</p>`;
+  const max = Math.max(...entries.map(([, v]) => v.length));
+  return `<div class="bars">${entries.map(([id, voters]) => `
+    <div class="bar">
+      <span class="lbl">${id === 'pas' ? 'Pas' : nm(id)}</span>
+      <span class="cnt">${voters.length}</span>
+      <span class="track"><span class="fill" style="width:${(voters.length / max) * 100}%"></span></span>
+      <span class="who">${voters.map(nm).join(', ')}</span>
+    </div>`).join('')}</div>`;
+}
+
+function dayPanel() {
+  const v = view.voting || {};
+  if (!v.open) {
+    return `<section class="night-hero" style="padding-block:20px">
+      <div class="sun" aria-hidden="true"></div>
+      <h2>Köy meydanı</h2>
+      <p class="muted">Tartışma zamanı. Yönetici oylamayı açınca burada oy verebilirsin.</p>
+    </section>`;
+  }
+  const canVote = view.me.alive;
+  return `<section class="panel gold">
+    <div class="eyebrow">${view.round}. gün · Oylama açık</div>
+    <h2>Kimi asalım?</h2>
+    ${canVote
+      ? `<p class="muted small">Oyunu kapanana kadar değiştirebilirsin.</p>
+         ${targetGrid(aliveOthers(), { act: 'day_vote', selected: v.myVote })}
+         <div class="row">
+           <button class="btn ${v.myVote === 'pas' ? 'light' : ''}" data-act="day_vote" data-id="pas">Pas geç</button>
+           ${v.myVote ? `<button class="btn ghost" data-act="day_vote" data-id="">Oyumu geri al</button>` : ''}
+         </div>`
+      : `<p class="muted">Ölüler oy veremez, sadece izler.</p>`}
+    <h3>Canlı sonuç</h3>
+    ${voteBars()}
+  </section>`;
+}
+
+function deadPanel() {
+  return `<section class="panel">
+    <div class="eyebrow">Oyun dışı</div>
+    <h2>Öldün</h2>
+    <p class="muted">Artık konuşamazsın ama oyunu buradan izleyebilirsin. Lütfen kimseye ipucu verme.</p>
+  </section>`;
+}
+
+function latestNews() {
+  const last = view.log[view.log.length - 1];
+  if (!last) return '';
+  return `<section class="panel"><div class="eyebrow">Son haber</div><p style="font-size:1.08rem">${esc(last.text)}</p></section>`;
+}
+
+function playersPanel() {
+  const alive = view.players.filter((p) => p.alive).length;
+  return `<section class="panel">
+    <div class="row between"><div class="eyebrow">Köy halkı</div><span class="small muted">${alive} hayatta · ${view.players.length} kişi</span></div>
+    <div class="chips">${view.players.map((p) => {
+      const role = p.role && p.id !== view.me.id ? ` · ${esc(ROLE_INFO[p.role]?.name)}` : '';
+      return `<span class="chip ${p.alive ? '' : 'dead'} ${p.id === view.me.id ? 'me' : ''} ${p.role === 'vampir' && p.id !== view.me.id ? 'vamp' : ''}">${esc(p.name)}${role}</span>`;
+    }).join('')}</div>
+  </section>`;
+}
+
+function logPanel() {
+  if (!view.log.length) return '';
+  return `<section class="panel">
+    <div class="eyebrow">Köy defteri</div>
+    <ul class="log">${view.log.map((l) => `<li><span class="when">${l.round ? `${l.round}. ${l.phase === 'night' ? 'gece' : 'gün'}` : ''}</span>${esc(l.text)}</li>`).join('')}</ul>
+  </section>`;
+}
+
+function endedPanel() {
+  const w = WINNER_TEXT[view.winner] || 'Oyun bitti';
+  const mine = view.me.role === 'vampir' ? 'vampir' : view.me.role === 'deli' ? 'deli' : 'koy';
+  const won = view.winner && view.winner === mine;
+  const groups = ROLE_ORDER.map((r) => [r, view.players.filter((p) => p.role === r)]).filter(([, l]) => l.length);
+  return `<section class="night-hero" style="padding-block:24px">
+      <div class="eyebrow">Oyun bitti</div>
+      <h1>${esc(w)}</h1>
+      ${view.winner ? `<p class="result ${won ? 'good' : 'bad'}">${won ? 'Kazandın' : 'Kaybettin'}</p>` : ''}
+    </section>
+    <section class="panel">
+      <div class="eyebrow">Kim neydi?</div>
+      ${groups.map(([r, l]) => `<div><h3>${esc(ROLE_INFO[r].name)}</h3><div class="chips" style="margin-top:6px">${l.map((p) => `<span class="chip ${p.alive ? '' : 'dead'} ${r === 'vampir' ? 'vamp' : ''}">${esc(p.name)}</span>`).join('')}</div></div>`).join('')}
+    </section>`;
+}
+
+// ---------- Ekranlar ----------
+
+function renderJoin() {
+  setPhasePill('Katıl', true);
+  const saved = store.get('vk-name') || '';
+  app.innerHTML = `
+    <section class="event-hero">
+      <div class="eyebrow">${esc(BRAND.org)} · ${esc(BRAND.tagline)}</div>
+      <div class="event">${esc(BRAND.event)}</div>
+      <p class="muted small">Toplantı bitti, şimdi köyde gece oluyor. Aramızda vampirler var: kim olduklarını gündüz oylamasında bulacağız.</p>
+    </section>
+    <section style="padding-block:4px;display:flex;flex-direction:column;gap:10px">
+      <h1>Köye hoş geldin</h1>
+      <p class="muted">Adını yaz ve katıl. Rolün yönetici dağıttığında bu telefonda gizlice görünecek.</p>
+    </section>
+    <form class="panel" id="joinForm" novalidate>
+      <label for="name" class="eyebrow">Adın</label>
+      <input type="text" id="name" maxlength="24" autocomplete="given-name" placeholder="Örn. Ayşe K." value="${esc(saved)}" required>
+      ${joinMsg ? `<p class="notice">${esc(joinMsg)}</p>` : ''}
+      <button class="btn primary block" type="submit">Köye katıl</button>
+    </form>`;
+  document.getElementById('joinForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = document.getElementById('name').value.trim();
+    if (!name) return toast('Bir isim yaz.');
+    try {
+      const { token: t } = await postJson('/api/join', { name });
+      token = t;
+      joinMsg = '';
+      store.set('vk-token', t);
+      store.set('vk-name', name);
+      start();
+    } catch (err) {
+      joinMsg = err.message;
+      renderJoin();
+    }
+  });
+}
+
+function render() {
+  document.body.classList.toggle('phase-day', view?.phase === 'day');
+  if (!token) return renderJoin();
+  if (!view) {
+    app.innerHTML = `<p class="muted" style="padding-block:40px;text-align:center">Köye bağlanılıyor…</p>`;
+    return;
+  }
+  setPhasePill(phaseLabel(view.phase, view.round), true);
+  const parts = [];
+  const me = view.me;
+
+  if (view.phase === 'lobby') {
+    parts.push(`<section style="padding-block:20px 4px;display:flex;flex-direction:column;gap:8px">
+      <div class="eyebrow">Hoş geldin</div>
+      <h1>${esc(me.name)}</h1>
+      <p class="muted">Herkes katılınca yönetici rolleri dağıtacak. Bu ekranı açık tutabilirsin.</p>
+    </section>`);
+    parts.push(playersPanel());
+    parts.push(`<button class="btn ghost small" data-act="leave" style="align-self:flex-start">Farklı isimle katıl</button>`);
+  } else if (view.phase === 'ended') {
+    parts.push(endedPanel(), roleCard(true), logPanel());
+  } else {
+    parts.push(hunterPanel());
+    if (view.phase === 'reveal') {
+      parts.push(`<section style="display:flex;flex-direction:column;gap:6px"><div class="eyebrow">Roller dağıtıldı</div><h2>Rolüne gizlice bak</h2></section>`);
+      parts.push(roleCard(false), teammates());
+      parts.push(`<div class="notice">Rolünü kimseye gösterme. Yönetici geceyi başlattığında bu ekran değişecek.</div>`);
+    } else {
+      if (!me.alive) parts.push(deadPanel());
+      if (view.phase === 'night' && me.alive) parts.push(nightPanel());
+      if (view.phase === 'day') parts.push(latestNews(), dayPanel());
+      parts.push(roleCard(true), teammates(), seerHistory(), playersPanel(), logPanel());
+    }
+  }
+  app.innerHTML = parts.join('');
+}
+
+app.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-act]');
+  if (!el) return;
+  const a = el.dataset.act;
+  if (a === 'toggle-role') {
+    roleShown = !roleShown;
+    clearTimeout(roleTimer);
+    if (roleShown) roleTimer = setTimeout(() => { roleShown = false; render(); }, 8000);
+    return render();
+  }
+  if (a === 'leave') {
+    joinMsg = '';
+    if (es) es.close();
+    postJson('/api/action', { token, type: 'leave' }).catch(() => {}).finally(logout);
+    return;
+  }
+  act(a, el.dataset.id || null);
+});
+
+mountBrand();
+keepScreenOn();
+start();
+</script>
+</body>
+</html>
