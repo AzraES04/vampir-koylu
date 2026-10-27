@@ -3,7 +3,8 @@
 // Etkinlik bilgileri: metinleri buradan değiştirebilirsin.
 // Logo için public klasörüne logo.png (veya logo.svg) koyman yeterli; yoksa yazı gösterilir.
 const BRAND = {
-  org: 'İEE',
+  org: 'IEEE OMÜ',
+  orgFull: 'Ondokuz Mayıs Üniversitesi IEEE Öğrenci Topluluğu',
   event: 'Savunma Sanayi Günleri',
   tagline: 'Toplantı sonrası oyun gecesi',
 };

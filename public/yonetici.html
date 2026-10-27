@@ -7,7 +7,7 @@
 <title>Vampir Köylü Yönetici</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+SC:wght@600;700&family=Manrope:wght@400;600;700;800&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Manrope:wght@400;600;700;800&display=swap">
 <link rel="stylesheet" href="/style.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
@@ -15,13 +15,13 @@
 <div class="wrap wide">
   <header class="topbar">
     <div class="brandwrap">
-      <span class="org" data-brand="org">İEE</span>
+      <span class="org" data-brand="org">IEEE</span>
       <div class="brand">Vampir <b>Köylü</b><small><span data-brand="event">Savunma Sanayi Günleri</span> · Yönetici</small></div>
     </div>
     <div class="row" id="topActions"></div>
   </header>
   <main id="app" style="display:flex;flex-direction:column;gap:18px"></main>
-  <footer class="credit"><span data-brand="orgname">İEE</span><span class="sep"></span><span data-brand="event">Savunma Sanayi Günleri</span><span class="sep"></span><span data-brand="tagline">Toplantı sonrası oyun gecesi</span></footer>
+  <footer class="credit"><span data-brand="orgname">IEEE OMÜ</span><span class="sep"></span><span data-brand="event">Savunma Sanayi Günleri</span><span class="sep"></span><span data-brand="tagline">Toplantı sonrası oyun gecesi</span></footer>
 </div>
 
 <script src="/shared.js"></script>
@@ -390,7 +390,7 @@ function bigQr() {
   const url = joinUrl();
   const ov = document.createElement('div');
   ov.className = 'overlay';
-  ov.innerHTML = `<div class="big"><span style="font-size:0.8rem;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:#555">${esc(BRAND.org)} · ${esc(BRAND.event)}</span><strong style="font-size:1.3rem;text-align:center">Vampir Köylü: telefonla okut, adını yaz, katıl</strong><div id="bigqr"></div><div class="joinurl">${esc(url)}</div></div>`;
+  ov.innerHTML = `<div class="big"><img src="/logo.png" alt="${esc(BRAND.orgFull)}" style="width:min(320px,70vw);height:auto" onerror="this.remove()"><span style="font-size:0.8rem;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:#555">${esc(BRAND.org)} · ${esc(BRAND.event)}</span><strong style="font-size:1.3rem;text-align:center">Vampir Köylü: telefonla okut, adını yaz, katıl</strong><div id="bigqr"></div><div class="joinurl">${esc(url)}</div></div>`;
   ov.addEventListener('click', () => ov.remove());
   document.body.appendChild(ov);
   if (typeof QRCode !== 'undefined') new QRCode(document.getElementById('bigqr'), { text: url, width: 560, height: 560, correctLevel: QRCode.CorrectLevel.M });

@@ -7,20 +7,20 @@
 <title>Vampir Köylü</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+SC:wght@600;700&family=Manrope:wght@400;600;700;800&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Manrope:wght@400;600;700;800&display=swap">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <div class="wrap">
-  <header class="topbar">
+  <header class="topbar solo">
     <div class="brandwrap">
-      <span class="org" data-brand="org">İEE</span>
+      <span class="org" data-brand="org">IEEE</span>
       <div class="brand">Vampir <b>Köylü</b><small data-brand="event">Savunma Sanayi Günleri</small></div>
     </div>
     <span class="pill" id="phase"><span class="dot"></span><span id="phaseText">Bağlanıyor</span></span>
   </header>
   <main id="app" style="display:flex;flex-direction:column;gap:18px"></main>
-  <footer class="credit"><span data-brand="orgname">İEE</span><span class="sep"></span><span data-brand="event">Savunma Sanayi Günleri</span><span class="sep"></span><span data-brand="tagline">Toplantı sonrası oyun gecesi</span></footer>
+  <footer class="credit"><span data-brand="orgname">IEEE OMÜ</span><span class="sep"></span><span data-brand="event">Savunma Sanayi Günleri</span><span class="sep"></span><span data-brand="tagline">Toplantı sonrası oyun gecesi</span></footer>
 </div>
 
 <script src="/shared.js"></script>
@@ -334,6 +334,7 @@ function renderJoin() {
   const saved = store.get('vk-name') || '';
   app.innerHTML = `
     <section class="event-hero">
+      <span class="event-logo"><img src="/logo.png" alt="${esc(BRAND.orgFull)}" onerror="this.parentNode.remove()"></span>
       <div class="eyebrow">${esc(BRAND.org)} · ${esc(BRAND.tagline)}</div>
       <div class="event">${esc(BRAND.event)}</div>
       <p class="muted small">Toplantı bitti, şimdi köyde gece oluyor. Aramızda vampirler var: kim olduklarını gündüz oylamasında bulacağız.</p>
